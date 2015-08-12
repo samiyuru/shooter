@@ -1,0 +1,244 @@
+<%
+/**
+ * Created by samiyuru
+ */
+
+var log = new Log();
+
+/**
+ * Contains a set of utility functions
+ * @type {{guid: Function, pickTeam: Function, filterMembers: Function, toArray: Function}}
+ */
+var Util = {
+    guid: function () {
+        function s4() {
+            return Math.floor((1 + Math.random()) * 0x10000)
+                    .toString(16)
+                    .substring(1);
+        }
+
+        return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
+                s4() + '-' + s4() + s4() + s4();
+    },
+
+    pickTeam: function (members) {
+        var teamA = 0;
+        var teamB = 0;
+        for (var socket in members) {
+            var member = members[socket];
+            if (member.team == 'A') {
+                teamA++;
+            } else if (member.team == 'B') {
+                teamB++;
+            }
+        }
+        if (teamA > teamB) {
+            return 'B';
+        } else {
+            return 'A'
+        }
+    }
+};
+
+/**
+ * Mediates the events and route them according to the game logic
+ * @type {{onInit: Function, onClose: Function, onMove: Function, onFire: Function, onExplode: Function, onMember: Function, onUnmember: Function}}
+ */
+var GameCore = {
+
+    filterMembers: function (memberMap) {
+        log.info('Filtering: ' + stringify(memberMap));
+        var members = {};
+        for (var i in memberMap) {
+            var member = memberMap[i];
+            try {
+                member.ws.send("{}");
+                members[member.id] = member;
+            } catch (e) {
+                log.info('Error socket: ' + stringify(e));
+            }
+        }
+        log.info('Filter-output: ' + stringify(members));
+        return members;
+    },
+
+    toArray: function (map) {
+        var array = [];
+        for (var key in map) {
+            array.push(map[key]);
+        }
+        return array;
+    },
+
+    onInit: function (data, ws) {
+        log.info('Client Open: ' + stringify(ws));
+        var _id = Util.guid();
+        var membersMap = application.get('members');
+        if (!membersMap) {
+            membersMap = {};
+        }
+        var pickedTeam = Util.pickTeam(membersMap);
+        membersMap = this.filterMembers(membersMap);
+        var members = this.toArray(membersMap);
+        ws.send(stringify({
+            type: 'init',
+            uid: _id,
+            team: pickedTeam,
+            members: members
+        }));
+        membersMap[_id] = {
+            x: 0,
+            y: 0,
+            name: data.name,
+            team: pickedTeam,
+            id: _id,
+            ws: ws
+        };
+        for (var i in members) {
+            var member = members[i];
+            this.notifyMember(member, _id, pickedTeam, data.name);
+        }
+        application.put('members', membersMap);
+    },
+
+    onClose: function (data, ws) {
+        log.info('Client Close');
+        var members = application.get('members');
+        var leaverId = data.id;
+        delete members[leaverId];
+        for (var i in members) {
+            var member = members[i];
+            this.notifyUnmember(member, leaverId);
+        }
+        application.put('members', members);
+    },
+
+    onMove: function (data, ws, _data) {
+        log.info('Move action: ' + _data);
+        var moverId = data.id;
+        log.info('Client: ' + moverId + ' moved');
+        var members = application.get('members');
+        for (var memId in members) {
+            var member = members[memId];
+            if (member.id == moverId) {
+                member.x = data.x;
+                member.y = data.y;
+            } else {
+                try {
+                    member.ws.send(_data);
+                } catch (e) {
+                }
+            }
+        }
+        application.put('members', members);
+    },
+
+    onFire: function (data, ws) {
+        var firerId = data.id;
+        log.info('Client: ' + firerId + ' fired');
+        var members = application.get('members');
+        for (var memId in members) {
+            var member = members[memId];
+            if (member.id != firerId) {
+                try {
+                    member.ws.send(stringify(data));
+                } catch (e) {
+                }
+            }
+        }
+    },
+
+    onExplode: function (data, ws) {
+        var senderId = data.senderId;
+        var explodeeId = data.explodeeId;
+        log.info('Client: ' + explodeeId + ' exploded by ' + senderId);
+        var members = application.get('members');
+        for (var memId in members) {
+            var member = members[memId];
+            if (member.id != senderId) {
+                try {
+                    member.ws.send(stringify({
+                        type: 'explode',
+                        id: explodeeId,
+                        shooter: senderId
+                    }));
+                } catch (e) {
+                }
+            }
+        }
+    },
+
+    notifyMember: function (member, _id, pickedTeam, name) {
+        if (member.id != _id) {
+            log.info('Broad cast new member to: ' + member.id);
+            try {
+                member.ws.send(stringify({
+                    type: 'member',
+                    id: _id,
+                    team: pickedTeam,
+                    name: name,
+                    x: 0,
+                    y: 0
+                }));
+            } catch (e) {
+            }
+        }
+    },
+
+    notifyUnmember: function (member, leaverId) {
+        if (member.id != leaverId) {
+            log.info('Broad cast left member to: ' + member.id);
+            try {
+                member.ws.send(stringify({
+                    type: 'unmember',
+                    id: leaverId
+                }));
+            } catch (e) {
+            }
+        }
+    }
+};
+
+/**
+ * Handles the events coming though the websockets
+ * @type {{onText: Function, onopen: Function, onclose: Function}}
+ */
+var EventHandlers = {
+    onText: function (_data) {
+        var data = parse(_data);
+        log.info('Client Sent : ' + _data);
+        var ws = this;
+
+        if (!(data && data.type)) {
+            return;
+        }
+
+        if (data.type == 'init') {
+            GameCore.onInit(data, ws);
+        } else if (data.type == 'close') {
+            GameCore.onClose(data, ws);
+        } else if (data.type == 'move') {
+            GameCore.onMove(data, ws, _data);
+        } else if (data.type == 'fire') {
+            GameCore.onFire(data, ws);
+        } else if (data.type == 'explode') {
+            GameCore.onExplode(data, ws);
+        }
+    },
+
+    onopen: function (stream) {
+        log.info('Client Open Event: ' + stream.toString());
+    },
+
+    onclose: function (stream) {
+        log.info('Client Close Event: ' + stream.toString());
+    }
+};
+
+(function () {
+    webSocket.onopen = EventHandlers.onopen;
+    webSocket.onclose = EventHandlers.onclose;
+    webSocket.ontext = EventHandlers.onText;
+})();
+
+%>
