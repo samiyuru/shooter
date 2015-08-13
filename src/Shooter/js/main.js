@@ -60,6 +60,9 @@ $(window).load(function () {
     var playerName = $.cookie('playerName');
     if (playerName == null) {
         var playerName = prompt('Please enter your name', '');
+        if(playerName == null){
+            playerName = 'Fighter';
+        }
         $.cookie('playerName', playerName);
     }
 
@@ -199,6 +202,9 @@ function PlayerFlight(bgElem, name) {
         y: 0
     };
 
+    var lastFired = 0;
+    var GUN_LOAD_TIME = 500;
+
     var self = this;
 
     function mouseMoveHandler(event) {
@@ -213,6 +219,11 @@ function PlayerFlight(bgElem, name) {
                 }
             }), 250);
         })(mouseX, mouseY);
+    }
+
+    function isGunLoaded() {
+        var now = (new Date()).getTime();
+        return (now - lastFired > GUN_LOAD_TIME);
     }
 
     function clickHandler() {
@@ -230,6 +241,9 @@ function PlayerFlight(bgElem, name) {
     };
 
     this.fire = function () {
+        if (!(isGunLoaded())) {
+            return;
+        }
         var fireBall = new FireBall(bgElem, {
             x: craftPos.x,
             y: craftPos.y
@@ -248,6 +262,7 @@ function PlayerFlight(bgElem, name) {
         if (self.listner) {
             self.listner.fired();
         }
+        lastFired = (new Date()).getTime();
     };
 
     this.setPos = function (x, y) {
@@ -549,7 +564,7 @@ function Explosion(bgElem) {
  */
 function Connector() {
 
-    var url = 'ws://10.100.7.96:9763/jaggame/server.jag';
+    var url = 'ws://10.100.7.96:9763/Shooter/server.jag';
     var ws = null;
     var uid = '';
 
